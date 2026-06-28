@@ -16,9 +16,11 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.service.wallpaper.WallpaperService
 import android.view.Choreographer
+import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.core.net.toUri
 import kotlin.math.abs
+import kotlin.math.asin
 import kotlin.math.floor
 import kotlin.math.min
 
@@ -34,7 +36,7 @@ class LenticularWallpaperService : WallpaperService() {
         private val decodeHandler = Handler(decodeThread.looper)
 
         private val rotationMatrix = FloatArray(9)
-        private val orientationValues = FloatArray(3)
+        private val displayRotationMatrix = FloatArray(9)
         private val dstRect = Rect()
         private val imageAPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
             isAntiAlias = false
@@ -66,6 +68,7 @@ class LenticularWallpaperService : WallpaperService() {
         private var sensorRegistered = false
         private var isVisibleToUser = false
         private var framePosted = false
+        private var displayRotation = Surface.ROTATION_0
         private var surfaceWidth = 0
         private var surfaceHeight = 0
         private var imageLeases: List<BitmapLease> = emptyList()
@@ -114,6 +117,7 @@ class LenticularWallpaperService : WallpaperService() {
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
             super.onSurfaceChanged(holder, format, width, height)
+            updateDisplayRotation()
             surfaceWidth = width
             surfaceHeight = height
             dstRect.set(0, 0, width, height)
@@ -123,6 +127,7 @@ class LenticularWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(visible: Boolean) {
             isVisibleToUser = visible
             if (visible) {
+                updateDisplayRotation()
                 requestBitmapLoad()
                 registerSensor()
                 startFrameLoop()
@@ -154,9 +159,7 @@ class LenticularWallpaperService : WallpaperService() {
             when (event.sensor.type) {
                 Sensor.TYPE_ROTATION_VECTOR,
                 Sensor.TYPE_GAME_ROTATION_VECTOR -> {
-                    SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-                    SensorManager.getOrientation(rotationMatrix, orientationValues)
-                    updateTargetPositionFromRoll(orientationValues[2])
+                    updateTargetPositionFromRotationVector(event.values)
                 }
 
                 Sensor.TYPE_ORIENTATION -> {
@@ -175,6 +178,12 @@ class LenticularWallpaperService : WallpaperService() {
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+        private fun updateDisplayRotation() {
+            displayRotation = runCatching {
+                getDisplayContext()?.display?.rotation
+            }.getOrNull() ?: Surface.ROTATION_0
+        }
 
         private fun registerSensor() {
             if (sensorRegistered) return
@@ -200,6 +209,65 @@ class LenticularWallpaperService : WallpaperService() {
             loopTiltActive = false
             loopDirection = 0f
         }
+
+        private fun updateTargetPositionFromRotationVector(values: FloatArray) {
+            SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
+            val screenMatrix = screenAdjustedRotationMatrix()
+            updateTargetPositionFromRoll(lateralRollFromMatrix(screenMatrix))
+        }
+
+        private fun screenAdjustedRotationMatrix(): FloatArray =
+            when (displayRotation) {
+                Surface.ROTATION_90 -> {
+                    if (
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_Y,
+                            SensorManager.AXIS_MINUS_X,
+                            displayRotationMatrix,
+                        )
+                    ) {
+                        displayRotationMatrix
+                    } else {
+                        rotationMatrix
+                    }
+                }
+
+                Surface.ROTATION_180 -> {
+                    if (
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_MINUS_X,
+                            SensorManager.AXIS_MINUS_Y,
+                            displayRotationMatrix,
+                        )
+                    ) {
+                        displayRotationMatrix
+                    } else {
+                        rotationMatrix
+                    }
+                }
+
+                Surface.ROTATION_270 -> {
+                    if (
+                        SensorManager.remapCoordinateSystem(
+                            rotationMatrix,
+                            SensorManager.AXIS_MINUS_Y,
+                            SensorManager.AXIS_X,
+                            displayRotationMatrix,
+                        )
+                    ) {
+                        displayRotationMatrix
+                    } else {
+                        rotationMatrix
+                    }
+                }
+
+                else -> rotationMatrix
+            }
+
+        private fun lateralRollFromMatrix(matrix: FloatArray): Float =
+            -asin(matrix[6].coerceIn(-1f, 1f))
 
         private fun updateTargetPositionFromRoll(rollRadians: Float) {
             filteredRollRadians += ROLL_SMOOTH_FACTOR * (rollRadians - filteredRollRadians)
