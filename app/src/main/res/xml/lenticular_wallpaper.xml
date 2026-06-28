@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The service handles separate FLAG_SYSTEM and FLAG_LOCK Engine instances via Engine.getWallpaperFlags(). -->
+<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/wallpaper_description"
+    android:settingsActivity="com.highdel4y.flipcardwallpaper.MainActivity"
+    android:thumbnail="@mipmap/ic_launcher" />
