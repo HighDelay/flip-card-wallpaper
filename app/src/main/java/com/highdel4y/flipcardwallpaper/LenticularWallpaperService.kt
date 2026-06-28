@@ -21,7 +21,6 @@ import android.view.SurfaceHolder
 import androidx.core.net.toUri
 import kotlin.math.abs
 import kotlin.math.asin
-import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.min
 
@@ -65,8 +64,10 @@ class LenticularWallpaperService : WallpaperService() {
                 }
             }
         }
-        private var activeSensor: Sensor? = null
-        private var sensorRegistered = false
+        private var orientationSensor: Sensor? = null
+        private var gyroSensor: Sensor? = null
+        private var orientationSensorRegistered = false
+        private var gyroSensorRegistered = false
         private var isVisibleToUser = false
         private var framePosted = false
         private var displayRotation = Surface.ROTATION_0
@@ -80,6 +81,8 @@ class LenticularWallpaperService : WallpaperService() {
         private var tiltSensitivity = WallpaperPrefs.DEFAULT_TILT_SENSITIVITY
         private var tiltStartSide = TiltStartSide.Right
         private var tiltStepRadians = WallpaperPrefs.DEFAULT_TILT_STEP_DEGREES * DEG_TO_RAD
+        private var flatSurfaceGuardEnabled = WallpaperPrefs.DEFAULT_FLAT_SURFACE_GUARD_ENABLED
+        private var flatSurfaceGuardActive = false
         private var loopEnabled = false
         private var loopTransitionMode = LoopTransitionMode.Snap
         private var loadGeneration = 0
@@ -89,6 +92,9 @@ class LenticularWallpaperService : WallpaperService() {
 
         private var filteredRollRadians = 0f
         private var lastGyroTimestampNs = 0L
+        private var lastAngularMotionTimestampNs = 0L
+        private var acceptedSideTiltRadians = 0f
+        private var hasAcceptedSideTilt = false
         private var wallpaperTarget = WallpaperTarget.System
         private var missingImagesText = WallpaperTarget.System.missingImagesText
 
@@ -104,19 +110,15 @@ class LenticularWallpaperService : WallpaperService() {
         @Volatile
         private var maxTiltPosition = 0f
 
-        private var hasNeutralTurnYaw = false
-        private var neutralTurnYawRadians = 0f
-
-
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
             wallpaperTarget = WallpaperTarget.fromFlags(readWallpaperFlags())
             missingImagesText = wallpaperTarget.missingImagesText
-            activeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-                ?: sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+            orientationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION)
-                ?: sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+            gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
             setTouchEventsEnabled(false)
         }
 
@@ -165,7 +167,7 @@ class LenticularWallpaperService : WallpaperService() {
                 Sensor.TYPE_ROTATION_VECTOR,
                 Sensor.TYPE_GAME_ROTATION_VECTOR,
                 Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
-                    updateTargetPositionFromRotationVector(event.values)
+                    updateTargetPositionFromRotationVector(event.values, event.timestamp)
                 }
 
                 Sensor.TYPE_ORIENTATION -> {
@@ -173,6 +175,9 @@ class LenticularWallpaperService : WallpaperService() {
                 }
 
                 Sensor.TYPE_GYROSCOPE -> {
+                    updateAngularMotionGate(event)
+                    if (orientationSensor != null) return
+
                     val lastTimestamp = lastGyroTimestampNs
                     if (lastTimestamp != 0L) {
                         val deltaSeconds = (event.timestamp - lastTimestamp) * NS_TO_SECONDS
@@ -192,15 +197,18 @@ class LenticularWallpaperService : WallpaperService() {
         }
 
         private fun registerSensor() {
-            if (sensorRegistered) return
-            activeSensor?.let { sensor ->
-                filteredRollRadians = 0f
-                hasNeutralTurnYaw = false
-                neutralTurnYawRadians = 0f
-                lastGyroTimestampNs = 0L
-                loopTiltActive = false
-                loopDirection = 0f
-                sensorRegistered = sensorManager.registerListener(
+            if (orientationSensorRegistered || gyroSensorRegistered) return
+            resetSensorState()
+            orientationSensor?.let { sensor ->
+                orientationSensorRegistered = sensorManager.registerListener(
+                    this,
+                    sensor,
+                    SensorManager.SENSOR_DELAY_GAME,
+                    sensorHandler,
+                )
+            }
+            gyroSensor?.let { sensor ->
+                gyroSensorRegistered = sensorManager.registerListener(
                     this,
                     sensor,
                     SensorManager.SENSOR_DELAY_GAME,
@@ -210,24 +218,27 @@ class LenticularWallpaperService : WallpaperService() {
         }
 
         private fun unregisterSensor() {
-            if (!sensorRegistered) return
+            if (!orientationSensorRegistered && !gyroSensorRegistered) return
             sensorManager.unregisterListener(this)
-            sensorRegistered = false
-            lastGyroTimestampNs = 0L
-            hasNeutralTurnYaw = false
-            neutralTurnYawRadians = 0f
-            loopTiltActive = false
-            loopDirection = 0f
+            orientationSensorRegistered = false
+            gyroSensorRegistered = false
+            resetSensorState()
         }
 
-        private fun updateTargetPositionFromRotationVector(values: FloatArray) {
+        private fun updateTargetPositionFromRotationVector(values: FloatArray, timestampNs: Long) {
             SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
             val screenMatrix = screenAdjustedRotationMatrix()
-            val lateralRoll = lateralRollFromMatrix(screenMatrix)
-            val uprightTurn = uprightTurnFromMatrix(screenMatrix) *
-                uprightTurnWeight(screenMatrix) *
-                UPRIGHT_TURN_GAIN
-            updateTargetPositionFromRoll(blendedSideTilt(lateralRoll, uprightTurn))
+            updateTargetPositionFromSideTilt(guardedSideTiltFromMatrix(screenMatrix), timestampNs)
+        }
+
+        private fun updateAngularMotionGate(event: SensorEvent) {
+            val angularSpeed =
+                abs(event.values[0]) +
+                    abs(event.values[1]) +
+                    abs(event.values[2])
+            if (angularSpeed >= GYRO_MOTION_GATE_RADIANS_PER_SECOND) {
+                lastAngularMotionTimestampNs = event.timestamp
+            }
         }
 
         private fun screenAdjustedRotationMatrix(): FloatArray =
@@ -283,32 +294,50 @@ class LenticularWallpaperService : WallpaperService() {
         private fun lateralRollFromMatrix(matrix: FloatArray): Float =
             -asin(matrix[6].coerceIn(-1f, 1f))
 
-        private fun uprightTurnFromMatrix(matrix: FloatArray): Float {
-            val yawRadians = atan2(matrix[2], matrix[5])
-            if (!hasNeutralTurnYaw) {
-                neutralTurnYawRadians = yawRadians
-                hasNeutralTurnYaw = true
-                return 0f
+        private fun guardedSideTiltFromMatrix(matrix: FloatArray): Float {
+            val sideTilt = lateralRollFromMatrix(matrix)
+            if (!flatSurfaceGuardEnabled) {
+                flatSurfaceGuardActive = false
+                return sideTilt
             }
-            return -wrapRadians(yawRadians - neutralTurnYawRadians)
+
+            val flatness = abs(matrix[8])
+            flatSurfaceGuardActive = if (flatSurfaceGuardActive) {
+                flatness >= FLAT_SURFACE_GUARD_EXIT
+            } else {
+                flatness >= FLAT_SURFACE_GUARD_ENTER
+            }
+            return if (flatSurfaceGuardActive) 0f else sideTilt
         }
 
-        private fun uprightTurnWeight(matrix: FloatArray): Float {
-            val screenTopVertical = abs(matrix[7]).coerceInUnit()
-            return ((screenTopVertical - UPRIGHT_TURN_START) / UPRIGHT_TURN_RANGE).coerceInUnit()
+        private fun updateTargetPositionFromSideTilt(sideTiltRadians: Float, timestampNs: Long) {
+            if (shouldAcceptSideTilt(sideTiltRadians, timestampNs)) {
+                acceptedSideTiltRadians = sideTiltRadians
+                hasAcceptedSideTilt = true
+                updateTargetPositionFromRoll(sideTiltRadians)
+            }
         }
 
-        private fun blendedSideTilt(lateralRoll: Float, uprightTurn: Float): Float {
-            if (uprightTurn == 0f || lateralRoll == 0f) {
-                return lateralRoll + uprightTurn
-            }
+        private fun shouldAcceptSideTilt(sideTiltRadians: Float, timestampNs: Long): Boolean {
+            if (flatSurfaceGuardActive) return true
+            if (!hasAcceptedSideTilt || !gyroSensorRegistered) return true
 
-            val sameDirection = (lateralRoll > 0f) == (uprightTurn > 0f)
-            if (!sameDirection) {
-                return lateralRoll + uprightTurn
-            }
+            val tiltDelta = abs(sideTiltRadians - acceptedSideTiltRadians)
+            if (tiltDelta <= ROTATION_VECTOR_NOISE_RADIANS) return true
 
-            return if (abs(uprightTurn) > abs(lateralRoll)) uprightTurn else lateralRoll
+            return lastAngularMotionTimestampNs != 0L &&
+                timestampNs - lastAngularMotionTimestampNs <= GYRO_MOTION_GATE_NS
+        }
+
+        private fun resetSensorState() {
+            filteredRollRadians = 0f
+            lastGyroTimestampNs = 0L
+            lastAngularMotionTimestampNs = 0L
+            acceptedSideTiltRadians = 0f
+            hasAcceptedSideTilt = false
+            flatSurfaceGuardActive = false
+            loopTiltActive = false
+            loopDirection = 0f
         }
 
         private fun updateTargetPositionFromRoll(rollRadians: Float) {
@@ -402,6 +431,8 @@ class LenticularWallpaperService : WallpaperService() {
             val nextTiltSensitivity = WallpaperPrefs.tiltSensitivity(this@LenticularWallpaperService)
             val nextTiltStartSide = WallpaperPrefs.tiltStartSide(this@LenticularWallpaperService)
             val nextTiltStepRadians = WallpaperPrefs.tiltStepDegrees(this@LenticularWallpaperService) * DEG_TO_RAD
+            val nextFlatSurfaceGuardEnabled =
+                WallpaperPrefs.flatSurfaceGuardEnabled(this@LenticularWallpaperService)
             val width = surfaceWidth
             val height = surfaceHeight
             val generation = ++loadGeneration
@@ -435,6 +466,10 @@ class LenticularWallpaperService : WallpaperService() {
                         tiltSensitivity = nextTiltSensitivity
                         tiltStartSide = nextTiltStartSide
                         tiltStepRadians = nextTiltStepRadians
+                        flatSurfaceGuardEnabled = nextFlatSurfaceGuardEnabled
+                        if (!nextFlatSurfaceGuardEnabled) {
+                            flatSurfaceGuardActive = false
+                        }
                         loopEnabled = nextLoopEnabled
                         loopTransitionMode = nextLoopTransitionMode
                         maxTiltPosition = maxPositionFor(nextLeases.size)
@@ -790,19 +825,11 @@ class LenticularWallpaperService : WallpaperService() {
         private const val ROLL_DEAD_ZONE_RADIANS = 2f * DEG_TO_RAD
         private const val ROLL_ACTIVE_RANGE_RADIANS = 33f * DEG_TO_RAD
         private const val MIN_TILT_STEP_RADIANS = 0.5f * DEG_TO_RAD
-        private const val UPRIGHT_TURN_START = 0.58f
-        private const val UPRIGHT_TURN_FULL = 0.86f
-        private const val UPRIGHT_TURN_RANGE = UPRIGHT_TURN_FULL - UPRIGHT_TURN_START
-        private const val UPRIGHT_TURN_GAIN = 0.42f
-        private const val TWO_PI = 6.2831855f
-        private const val PI = 3.1415927f
-
-        private fun wrapRadians(radians: Float): Float {
-            var wrapped = radians
-            while (wrapped > PI) wrapped -= TWO_PI
-            while (wrapped < -PI) wrapped += TWO_PI
-            return wrapped
-        }
+        private const val GYRO_MOTION_GATE_RADIANS_PER_SECOND = 0.045f
+        private const val GYRO_MOTION_GATE_NS = 220_000_000L
+        private const val ROTATION_VECTOR_NOISE_RADIANS = 0.006f
+        private const val FLAT_SURFACE_GUARD_ENTER = 0.78f
+        private const val FLAT_SURFACE_GUARD_EXIT = 0.68f
 
         private fun Float.coerceInUnit(): Float = when {
             this < 0f -> 0f

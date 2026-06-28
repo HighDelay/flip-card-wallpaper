@@ -26,7 +26,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -157,6 +156,7 @@ class MainActivity : ComponentActivity() {
                     onTiltSensitivityChanged = stateHolder::onTiltSensitivityChanged,
                     onTiltStartSideChanged = stateHolder::onTiltStartSideChanged,
                     onTiltStepDegreesChanged = stateHolder::onTiltStepDegreesChanged,
+                    onFlatSurfaceGuardChanged = stateHolder::onFlatSurfaceGuardChanged,
                     onMotionDefaults = stateHolder::onMotionDefaults,
                     onPreviewProgressChange = stateHolder::onPreviewProgressChange,
                     themeRevealSpec = themeRevealSpec,
@@ -226,6 +226,7 @@ data class FlipCardUiState(
     val tiltSensitivity: Float,
     val tiltStartSide: TiltStartSide,
     val tiltStepDegrees: Float,
+    val flatSurfaceGuardEnabled: Boolean,
     val previewProgress: Float,
 ) {
     val canApplyWallpaper: Boolean
@@ -249,6 +250,7 @@ class FlipCardStateHolder(context: Context) {
             tiltSensitivity = WallpaperPrefs.tiltSensitivity(appContext),
             tiltStartSide = WallpaperPrefs.tiltStartSide(appContext),
             tiltStepDegrees = WallpaperPrefs.tiltStepDegrees(appContext),
+            flatSurfaceGuardEnabled = WallpaperPrefs.flatSurfaceGuardEnabled(appContext),
             previewProgress = 0f,
         ),
     )
@@ -342,12 +344,18 @@ class FlipCardStateHolder(context: Context) {
         state = state.copy(tiltStepDegrees = sanitized)
     }
 
+    fun onFlatSurfaceGuardChanged(enabled: Boolean) {
+        WallpaperPrefs.saveFlatSurfaceGuardEnabled(appContext, enabled)
+        state = state.copy(flatSurfaceGuardEnabled = enabled)
+    }
+
     fun onMotionDefaults() {
         WallpaperPrefs.saveTransitionSpeed(appContext, WallpaperPrefs.DEFAULT_TRANSITION_SPEED)
         WallpaperPrefs.saveTiltThresholdDegrees(appContext, WallpaperPrefs.DEFAULT_TILT_THRESHOLD_DEGREES)
         WallpaperPrefs.saveTiltSensitivity(appContext, WallpaperPrefs.DEFAULT_TILT_SENSITIVITY)
         WallpaperPrefs.saveTiltStartSide(appContext, TiltStartSide.Right)
         WallpaperPrefs.saveTiltStepDegrees(appContext, WallpaperPrefs.DEFAULT_TILT_STEP_DEGREES)
+        WallpaperPrefs.saveFlatSurfaceGuardEnabled(appContext, WallpaperPrefs.DEFAULT_FLAT_SURFACE_GUARD_ENABLED)
         WallpaperPrefs.saveLoopTransitionMode(appContext, LoopTransitionMode.Snap)
         state = state.copy(
             transitionSpeed = WallpaperPrefs.DEFAULT_TRANSITION_SPEED,
@@ -355,6 +363,7 @@ class FlipCardStateHolder(context: Context) {
             tiltSensitivity = WallpaperPrefs.DEFAULT_TILT_SENSITIVITY,
             tiltStartSide = TiltStartSide.Right,
             tiltStepDegrees = WallpaperPrefs.DEFAULT_TILT_STEP_DEGREES,
+            flatSurfaceGuardEnabled = WallpaperPrefs.DEFAULT_FLAT_SURFACE_GUARD_ENABLED,
             loopTransitionMode = LoopTransitionMode.Snap,
         )
     }
@@ -387,6 +396,7 @@ private fun FlipCardScreen(
     onTiltSensitivityChanged: (Float) -> Unit,
     onTiltStartSideChanged: (TiltStartSide) -> Unit,
     onTiltStepDegreesChanged: (Float) -> Unit,
+    onFlatSurfaceGuardChanged: (Boolean) -> Unit,
     onMotionDefaults: () -> Unit,
     onPreviewProgressChange: (Float) -> Unit,
     themeRevealSpec: ThemeRevealSpec?,
@@ -425,6 +435,7 @@ private fun FlipCardScreen(
             onTiltSensitivityChanged = onTiltSensitivityChanged,
             onTiltStartSideChanged = onTiltStartSideChanged,
             onTiltStepDegreesChanged = onTiltStepDegreesChanged,
+            onFlatSurfaceGuardChanged = onFlatSurfaceGuardChanged,
             onMotionDefaults = onMotionDefaults,
             onPreviewProgressChange = onPreviewProgressChange,
             onDarkThemeChanged = onDarkThemeChanged,
@@ -452,6 +463,7 @@ private fun FlipCardScreen(
                     onTiltSensitivityChanged = {},
                     onTiltStartSideChanged = {},
                     onTiltStepDegreesChanged = {},
+                    onFlatSurfaceGuardChanged = {},
                     onMotionDefaults = {},
                     onPreviewProgressChange = {},
                     onDarkThemeChanged = { _, _ -> },
@@ -479,6 +491,7 @@ private fun FlipCardScreenContent(
     onTiltSensitivityChanged: (Float) -> Unit,
     onTiltStartSideChanged: (TiltStartSide) -> Unit,
     onTiltStepDegreesChanged: (Float) -> Unit,
+    onFlatSurfaceGuardChanged: (Boolean) -> Unit,
     onMotionDefaults: () -> Unit,
     onPreviewProgressChange: (Float) -> Unit,
     onDarkThemeChanged: (Boolean, Offset) -> Unit,
@@ -533,6 +546,7 @@ private fun FlipCardScreenContent(
                 tiltSensitivity = state.tiltSensitivity,
                 tiltStartSide = state.tiltStartSide,
                 tiltStepDegrees = state.tiltStepDegrees,
+                flatSurfaceGuardEnabled = state.flatSurfaceGuardEnabled,
                 onSelected = onTransitionSelected,
                 onLoopChanged = onLoopChanged,
                 onLoopTransitionModeChanged = onLoopTransitionModeChanged,
@@ -541,6 +555,7 @@ private fun FlipCardScreenContent(
                 onTiltSensitivityChanged = onTiltSensitivityChanged,
                 onTiltStartSideChanged = onTiltStartSideChanged,
                 onTiltStepDegreesChanged = onTiltStepDegreesChanged,
+                onFlatSurfaceGuardChanged = onFlatSurfaceGuardChanged,
                 onMotionDefaults = onMotionDefaults,
             )
             WallpaperSequenceEditor(
@@ -778,22 +793,7 @@ private fun LenticularPreviewCard(
                     .aspectRatio(0.74f)
                     .clip(RoundedCornerShape(28.dp))
                     .then(if (renderImages) Modifier.background(placeholderBrush()) else Modifier)
-                    .onSizeChanged { previewSize = it }
-                    .pointerInput(previewSize.width, imageUris.size) {
-                        fun updateFromX(x: Float) {
-                            val width = previewSize.width
-                            if (width > 0) {
-                                onPreviewProgressChange((x / width.toFloat()).coerceIn(0f, 1f))
-                            }
-                        }
-                        detectDragGestures(
-                            onDragStart = { updateFromX(it.x) },
-                            onDrag = { change, _ ->
-                                updateFromX(change.position.x)
-                                change.consume()
-                            },
-                        )
-                    },
+                    .onSizeChanged { previewSize = it },
                 contentAlignment = Alignment.Center,
             ) {
                 if (renderImages) {
@@ -992,6 +992,7 @@ private fun TransitionSelector(
     tiltSensitivity: Float,
     tiltStartSide: TiltStartSide,
     tiltStepDegrees: Float,
+    flatSurfaceGuardEnabled: Boolean,
     onSelected: (TransitionEffect) -> Unit,
     onLoopChanged: (Boolean) -> Unit,
     onLoopTransitionModeChanged: (LoopTransitionMode) -> Unit,
@@ -1000,6 +1001,7 @@ private fun TransitionSelector(
     onTiltSensitivityChanged: (Float) -> Unit,
     onTiltStartSideChanged: (TiltStartSide) -> Unit,
     onTiltStepDegreesChanged: (Float) -> Unit,
+    onFlatSurfaceGuardChanged: (Boolean) -> Unit,
     onMotionDefaults: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1105,6 +1107,13 @@ private fun TransitionSelector(
                     onValueChange = onTiltThresholdChanged,
                     valueRange = WallpaperPrefs.MIN_TILT_THRESHOLD_DEGREES..WallpaperPrefs.MAX_TILT_THRESHOLD_DEGREES,
                     steps = 13,
+                )
+                MotionSwitchRow(
+                    label = "Surface guard",
+                    description = "Neutralizes tilt while the phone is nearly flat.",
+                    note = "This may prevent the wallpaper from shifting while you hold the phone in the flat position.",
+                    checked = flatSurfaceGuardEnabled,
+                    onCheckedChange = onFlatSurfaceGuardChanged,
                 )
                 TuningSlider(
                     label = "Sensitivity",
@@ -1306,6 +1315,49 @@ private fun TuningSlider(
             valueRange = valueRange,
             steps = steps,
         )
+    }
+}
+
+@Composable
+private fun MotionSwitchRow(
+    label: String,
+    description: String,
+    note: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+            )
+        }
+        if (note != null) {
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
