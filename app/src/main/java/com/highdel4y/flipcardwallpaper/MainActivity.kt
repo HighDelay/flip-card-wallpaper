@@ -26,6 +26,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +42,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -67,6 +69,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -101,6 +104,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import com.highdel4y.flipcardwallpaper.ui.theme.FlipCardTheme
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
@@ -147,6 +151,7 @@ class MainActivity : ComponentActivity() {
                     darkTheme = darkTheme,
                     onImagesAdded = stateHolder::onImagesAdded,
                     onImageRemoved = stateHolder::onImageRemoved,
+                    onImageMoved = stateHolder::onImageMoved,
                     onImageTransformChanged = stateHolder::onImageTransformChanged,
                     onTransitionSelected = stateHolder::onTransitionSelected,
                     onLoopChanged = stateHolder::onLoopChanged,
@@ -284,6 +289,26 @@ class FlipCardStateHolder(context: Context) {
         )
     }
 
+    fun onImageMoved(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        if (fromIndex !in state.imageUris.indices || toIndex !in state.imageUris.indices) return
+
+        val nextUris = state.imageUris.toMutableList().apply {
+            add(toIndex, removeAt(fromIndex))
+        }
+        val nextTransforms = state.imageTransforms.toMutableList().apply {
+            while (size < state.imageUris.size) add(ImageTransform.Centered)
+            add(toIndex, removeAt(fromIndex))
+        }
+        WallpaperPrefs.saveImageUris(appContext, nextUris)
+        WallpaperPrefs.saveImageTransforms(appContext, nextUris.map { it.toString() }, nextTransforms)
+        state = state.copy(
+            imageUris = nextUris,
+            imageTransforms = nextTransforms,
+            previewProgress = state.previewProgress.coerceIn(0f, 1f),
+        )
+    }
+
     fun onImageTransformChanged(index: Int, transform: ImageTransform) {
         if (index !in state.imageUris.indices) return
         val nextTransforms = state.imageUris.mapIndexed { currentIndex, _ ->
@@ -387,6 +412,7 @@ private fun FlipCardScreen(
     darkTheme: Boolean,
     onImagesAdded: (List<Uri>) -> Unit,
     onImageRemoved: (Int) -> Unit,
+    onImageMoved: (Int, Int) -> Unit,
     onImageTransformChanged: (Int, ImageTransform) -> Unit,
     onTransitionSelected: (TransitionEffect) -> Unit,
     onLoopChanged: (Boolean) -> Unit,
@@ -426,6 +452,7 @@ private fun FlipCardScreen(
             renderImages = true,
             onAddPhotos = launchImagePicker,
             onImageRemoved = onImageRemoved,
+            onImageMoved = onImageMoved,
             onImageTransformChanged = onImageTransformChanged,
             onTransitionSelected = onTransitionSelected,
             onLoopChanged = onLoopChanged,
@@ -454,6 +481,7 @@ private fun FlipCardScreen(
                     renderImages = false,
                     onAddPhotos = {},
                     onImageRemoved = {},
+                    onImageMoved = { _, _ -> },
                     onImageTransformChanged = { _, _ -> },
                     onTransitionSelected = {},
                     onLoopChanged = {},
@@ -482,6 +510,7 @@ private fun FlipCardScreenContent(
     renderImages: Boolean,
     onAddPhotos: () -> Unit,
     onImageRemoved: (Int) -> Unit,
+    onImageMoved: (Int, Int) -> Unit,
     onImageTransformChanged: (Int, ImageTransform) -> Unit,
     onTransitionSelected: (TransitionEffect) -> Unit,
     onLoopChanged: (Boolean) -> Unit,
@@ -564,6 +593,7 @@ private fun FlipCardScreenContent(
                 renderImages = renderImages,
                 onAddPhotos = onAddPhotos,
                 onImageRemoved = onImageRemoved,
+                onImageMoved = onImageMoved,
                 onImageTransformChanged = onImageTransformChanged,
             )
         }
@@ -1368,10 +1398,49 @@ private fun WallpaperSequenceEditor(
     renderImages: Boolean,
     onAddPhotos: () -> Unit,
     onImageRemoved: (Int) -> Unit,
+    onImageMoved: (Int, Int) -> Unit,
     onImageTransformChanged: (Int, ImageTransform) -> Unit,
 ) {
     var editingIndex by remember { mutableStateOf<Int?>(null) }
     val activeEditIndex = editingIndex?.takeIf { it in imageUris.indices }
+    val latestUris by rememberUpdatedState(imageUris)
+    var itemHeights by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    val latestItemHeights by rememberUpdatedState(itemHeights)
+    var draggedUriString by remember { mutableStateOf<String?>(null) }
+    var draggedOffsetY by remember { mutableStateOf(0f) }
+
+    fun stopReorderDrag() {
+        draggedUriString = null
+        draggedOffsetY = 0f
+    }
+
+    fun reorderByDrag(deltaY: Float) {
+        val dragged = draggedUriString ?: return
+        val uris = latestUris
+        val currentIndex = uris.indexOfFirst { it.toString() == dragged }
+        if (currentIndex == -1) {
+            stopReorderDrag()
+            return
+        }
+
+        draggedOffsetY += deltaY
+        val heights = latestItemHeights
+        if (draggedOffsetY > 0f && currentIndex < uris.lastIndex) {
+            val nextKey = uris[currentIndex + 1].toString()
+            val threshold = ((heights[nextKey] ?: heights[dragged] ?: 120) * 0.45f).coerceAtLeast(48f)
+            if (draggedOffsetY >= threshold) {
+                draggedOffsetY -= threshold
+                onImageMoved(currentIndex, currentIndex + 1)
+            }
+        } else if (draggedOffsetY < 0f && currentIndex > 0) {
+            val previousKey = uris[currentIndex - 1].toString()
+            val threshold = ((heights[previousKey] ?: heights[dragged] ?: 120) * 0.45f).coerceAtLeast(48f)
+            if (-draggedOffsetY >= threshold) {
+                draggedOffsetY += threshold
+                onImageMoved(currentIndex, currentIndex - 1)
+            }
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1390,14 +1459,46 @@ private fun WallpaperSequenceEditor(
             EmptyWallpaperCard(onAddPhotos = onAddPhotos)
         } else {
             imageUris.forEachIndexed { index, uri ->
-                WallpaperSequenceCard(
-                    index = index,
-                    uri = uri,
-                    transform = imageTransforms.getOrNull(index) ?: ImageTransform.Centered,
-                    renderImage = renderImages,
-                    onRemove = { onImageRemoved(index) },
-                    onEdit = { editingIndex = index },
-                )
+                val uriString = uri.toString()
+                val isDragging = draggedUriString == uriString
+                key(uriString) {
+                    WallpaperSequenceCard(
+                        index = index,
+                        uri = uri,
+                        transform = imageTransforms.getOrNull(index) ?: ImageTransform.Centered,
+                        renderImage = renderImages,
+                        reorderEnabled = imageUris.size > 1,
+                        isDragging = isDragging,
+                        modifier = Modifier
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .offset {
+                                IntOffset(
+                                    x = 0,
+                                    y = if (isDragging) draggedOffsetY.roundToInt() else 0,
+                                )
+                            }
+                            .graphicsLayer {
+                                if (isDragging) {
+                                    scaleX = 1.02f
+                                    scaleY = 1.02f
+                                    shadowElevation = 18f
+                                }
+                            }
+                            .onSizeChanged { size ->
+                                if (itemHeights[uriString] != size.height) {
+                                    itemHeights = itemHeights + (uriString to size.height)
+                                }
+                            },
+                        onReorderStart = {
+                            draggedUriString = uriString
+                            draggedOffsetY = 0f
+                        },
+                        onReorderDrag = ::reorderByDrag,
+                        onReorderStop = ::stopReorderDrag,
+                        onRemove = { onImageRemoved(index) },
+                        onEdit = { editingIndex = index },
+                    )
+                }
             }
         }
     }
@@ -1446,6 +1547,12 @@ private fun WallpaperSequenceCard(
     uri: Uri,
     transform: ImageTransform,
     renderImage: Boolean,
+    reorderEnabled: Boolean,
+    isDragging: Boolean,
+    modifier: Modifier = Modifier,
+    onReorderStart: () -> Unit,
+    onReorderDrag: (Float) -> Unit,
+    onReorderStop: () -> Unit,
     onRemove: () -> Unit,
     onEdit: () -> Unit,
 ) {
@@ -1454,15 +1561,29 @@ private fun WallpaperSequenceCard(
     var thumbnailSize by remember { mutableStateOf(IntSize.Zero) }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDragging) {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            },
+        ),
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            ReorderHandle(
+                enabled = reorderEnabled,
+                isDragging = isDragging,
+                contentDescription = "Move Photo ${index + 1}",
+                onDragStart = onReorderStart,
+                onDrag = onReorderDrag,
+                onDragStop = onReorderStop,
+            )
             Box(
                 modifier = Modifier
                     .height(138.dp)
@@ -1511,6 +1632,64 @@ private fun WallpaperSequenceCard(
                     FilledTonalButton(onClick = onRemove, shape = RoundedCornerShape(20.dp)) {
                         Text("Remove")
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReorderHandle(
+    enabled: Boolean,
+    isDragging: Boolean,
+    contentDescription: String,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragStop: () -> Unit,
+) {
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDrag by rememberUpdatedState(onDrag)
+    val latestOnDragStop by rememberUpdatedState(onDragStop)
+    val containerColor = if (isDragging) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val dotColor = if (isDragging) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 0.82f else 0.32f)
+    }
+
+    Surface(
+        modifier = Modifier
+            .size(width = 34.dp, height = 86.dp)
+            .semantics { this.contentDescription = contentDescription }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { latestOnDragStart() },
+                    onDragEnd = { latestOnDragStop() },
+                    onDragCancel = { latestOnDragStop() },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        latestOnDrag(dragAmount.y)
+                    },
+                )
+            },
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor,
+        contentColor = dotColor,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.size(width = 16.dp, height = 28.dp)) {
+                val radius = 1.8.dp.toPx()
+                val leftX = size.width * 0.34f
+                val rightX = size.width * 0.66f
+                repeat(3) { row ->
+                    val y = size.height * (0.2f + row * 0.3f)
+                    drawCircle(color = dotColor, radius = radius, center = Offset(leftX, y))
+                    drawCircle(color = dotColor, radius = radius, center = Offset(rightX, y))
                 }
             }
         }
