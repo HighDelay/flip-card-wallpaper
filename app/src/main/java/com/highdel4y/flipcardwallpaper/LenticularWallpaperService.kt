@@ -20,9 +20,10 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import androidx.core.net.toUri
 import kotlin.math.abs
-import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.min
+import kotlin.math.sqrt
 
 class LenticularWallpaperService : WallpaperService() {
     override fun onCreateEngine(): Engine = LenticularEngine()
@@ -292,7 +293,7 @@ class LenticularWallpaperService : WallpaperService() {
             }
 
         private fun lateralRollFromMatrix(matrix: FloatArray): Float =
-            -asin(matrix[6].coerceIn(-1f, 1f))
+            atan2(-matrix[6], sqrt(matrix[0] * matrix[0] + matrix[3] * matrix[3]))
 
         private fun guardedSideTiltFromMatrix(matrix: FloatArray): Float {
             val sideTilt = lateralRollFromMatrix(matrix)
@@ -822,7 +823,7 @@ class LenticularWallpaperService : WallpaperService() {
         private const val ROLL_SMOOTH_FACTOR = 0.18f
         private const val DEG_TO_RAD = 0.017453292f
         private const val NS_TO_SECONDS = 0.000000001f
-        private const val ROLL_DEAD_ZONE_RADIANS = 2f * DEG_TO_RAD
+
         private const val ROLL_ACTIVE_RANGE_RADIANS = 33f * DEG_TO_RAD
         private const val MIN_TILT_STEP_RADIANS = 0.5f * DEG_TO_RAD
         private const val GYRO_MOTION_GATE_RADIANS_PER_SECOND = 0.045f
