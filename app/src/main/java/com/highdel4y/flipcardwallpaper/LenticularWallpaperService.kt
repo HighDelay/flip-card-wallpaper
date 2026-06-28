@@ -18,6 +18,7 @@ import android.service.wallpaper.WallpaperService
 import android.view.Choreographer
 import android.view.SurfaceHolder
 import androidx.core.net.toUri
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.min
 
@@ -61,7 +62,6 @@ class LenticularWallpaperService : WallpaperService() {
                 }
             }
         }
-
         private var activeSensor: Sensor? = null
         private var sensorRegistered = false
         private var isVisibleToUser = false
@@ -74,7 +74,10 @@ class LenticularWallpaperService : WallpaperService() {
         private var transitionSpeed = WallpaperPrefs.DEFAULT_TRANSITION_SPEED
         private var tiltThresholdRadians = WallpaperPrefs.DEFAULT_TILT_THRESHOLD_DEGREES * DEG_TO_RAD
         private var tiltSensitivity = WallpaperPrefs.DEFAULT_TILT_SENSITIVITY
+        private var tiltStartSide = TiltStartSide.Right
+        private var tiltStepRadians = WallpaperPrefs.DEFAULT_TILT_STEP_DEGREES * DEG_TO_RAD
         private var loopEnabled = false
+        private var loopTransitionMode = LoopTransitionMode.Snap
         private var loadGeneration = 0
 
         @Volatile
@@ -96,6 +99,7 @@ class LenticularWallpaperService : WallpaperService() {
 
         @Volatile
         private var maxTiltPosition = 0f
+
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
@@ -206,14 +210,11 @@ class LenticularWallpaperService : WallpaperService() {
 
             loopTiltActive = false
             loopDirection = 0f
-            val leftTiltRadians = (-filteredRollRadians).coerceAtLeast(0f)
-            val thresholdRadians = tiltThresholdRadians
-            val normalized = if (leftTiltRadians <= thresholdRadians) {
-                0f
-            } else {
-                ((leftTiltRadians - thresholdRadians) / activeRangeRadians()).coerceInUnit()
+            val activeTiltRadians = when (tiltStartSide) {
+                TiltStartSide.Right -> (-filteredRollRadians).coerceAtLeast(0f)
+                TiltStartSide.Left -> filteredRollRadians.coerceAtLeast(0f)
             }
-            targetPosition = normalized * maxTiltPosition
+            targetPosition = photoStepPositionForTilt(activeTiltRadians, maxTiltPosition)
         }
 
         private fun updateLoopTargetFromRoll(rollRadians: Float) {
@@ -242,13 +243,29 @@ class LenticularWallpaperService : WallpaperService() {
 
             loopDirection = direction
             val tiltRadians = if (direction > 0f) leftTiltRadians else rightTiltRadians
-            val normalized = ((tiltRadians - thresholdRadians) / activeRangeRadians()).coerceInUnit()
-            targetPosition = direction * normalized * maxPosition
-            loopTiltActive = true
+            val loopPosition = when (loopTransitionMode) {
+                LoopTransitionMode.Snap -> photoStepPositionForTilt(tiltRadians, maxPosition)
+                LoopTransitionMode.Smooth -> photoSmoothPositionForTilt(tiltRadians, maxPosition)
+            }
+            targetPosition = direction * loopPosition
+            loopTiltActive = loopPosition > 0f
         }
 
         private fun activeRangeRadians(): Float =
             ROLL_ACTIVE_RANGE_RADIANS / tiltSensitivity
+
+        private fun photoStepPositionForTilt(tiltRadians: Float, maxPosition: Float): Float {
+            if (maxPosition <= 0f || tiltRadians <= tiltThresholdRadians) return 0f
+            val effectiveStep = (tiltStepRadians / tiltSensitivity).coerceAtLeast(MIN_TILT_STEP_RADIANS)
+            val step = floor((tiltRadians - tiltThresholdRadians) / effectiveStep).toFloat()
+            return step.coerceIn(0f, maxPosition)
+        }
+
+        private fun photoSmoothPositionForTilt(tiltRadians: Float, maxPosition: Float): Float {
+            if (maxPosition <= 0f || tiltRadians <= tiltThresholdRadians) return 0f
+            val normalized = ((tiltRadians - tiltThresholdRadians) / activeRangeRadians()).coerceInUnit()
+            return normalized * maxPosition
+        }
 
         private fun startFrameLoop() {
             if (framePosted) return
@@ -266,18 +283,21 @@ class LenticularWallpaperService : WallpaperService() {
         private fun requestBitmapLoad() {
             if (surfaceWidth <= 0 || surfaceHeight <= 0) return
 
-            val uriStrings = WallpaperPrefs.imageUriStrings(this@LenticularWallpaperService)
-            val transforms = WallpaperPrefs.imageTransforms(this@LenticularWallpaperService, uriStrings)
             val nextTransitionEffect = WallpaperPrefs.transitionEffect(this@LenticularWallpaperService)
             val nextLoopEnabled = WallpaperPrefs.loopEnabled(this@LenticularWallpaperService)
+            val nextLoopTransitionMode = WallpaperPrefs.loopTransitionMode(this@LenticularWallpaperService)
             val nextTransitionSpeed = WallpaperPrefs.transitionSpeed(this@LenticularWallpaperService)
             val nextTiltThresholdRadians =
                 WallpaperPrefs.tiltThresholdDegrees(this@LenticularWallpaperService) * DEG_TO_RAD
             val nextTiltSensitivity = WallpaperPrefs.tiltSensitivity(this@LenticularWallpaperService)
+            val nextTiltStartSide = WallpaperPrefs.tiltStartSide(this@LenticularWallpaperService)
+            val nextTiltStepRadians = WallpaperPrefs.tiltStepDegrees(this@LenticularWallpaperService) * DEG_TO_RAD
             val width = surfaceWidth
             val height = surfaceHeight
             val generation = ++loadGeneration
 
+            val uriStrings = WallpaperPrefs.imageUriStrings(this@LenticularWallpaperService)
+            val transforms = WallpaperPrefs.imageTransforms(this@LenticularWallpaperService, uriStrings)
             decodeHandler.post {
                 val nextLeases = ArrayList<BitmapLease>(uriStrings.size)
                 val nextTransforms = ArrayList<ImageTransform>(uriStrings.size)
@@ -303,7 +323,10 @@ class LenticularWallpaperService : WallpaperService() {
                         transitionSpeed = nextTransitionSpeed
                         tiltThresholdRadians = nextTiltThresholdRadians
                         tiltSensitivity = nextTiltSensitivity
+                        tiltStartSide = nextTiltStartSide
+                        tiltStepRadians = nextTiltStepRadians
                         loopEnabled = nextLoopEnabled
+                        loopTransitionMode = nextLoopTransitionMode
                         maxTiltPosition = maxPositionFor(nextLeases.size)
                         if (nextLoopEnabled) {
                             targetPosition = targetPosition.coerceIn(-maxTiltPosition, maxTiltPosition)
@@ -393,12 +416,18 @@ class LenticularWallpaperService : WallpaperService() {
         private fun updateFramePosition(imageCount: Int): Float {
             if (loopEnabled && imageCount > 1) {
                 val maxPosition = maxPositionFor(imageCount)
-                currentPosition += positionSmoothFactor() * (targetPosition - currentPosition)
+                val target = targetPosition.coerceIn(-maxPosition, maxPosition)
+                currentPosition = smoothPositionToward(target)
                 return currentPosition.coerceIn(-maxPosition, maxPosition)
             }
 
-            currentPosition += positionSmoothFactor() * (targetPosition - currentPosition)
+            currentPosition = smoothPositionToward(targetPosition)
             return currentPosition.coerceIn(0f, maxPositionFor(imageCount))
+        }
+
+        private fun smoothPositionToward(target: Float): Float {
+            val next = currentPosition + positionSmoothFactor() * (target - currentPosition)
+            return if (abs(target - next) <= POSITION_SETTLE_EPSILON) target else next
         }
 
         private fun positionSmoothFactor(): Float =
@@ -641,14 +670,17 @@ class LenticularWallpaperService : WallpaperService() {
 
     private companion object {
         private const val MAX_ALPHA = 255f
-        private const val POSITION_SMOOTH_FACTOR = 0.22f
-        private const val POSITION_SMOOTH_MIN = 0.08f
-        private const val POSITION_SMOOTH_MAX = 0.55f
+        private const val POSITION_SMOOTH_FACTOR = 0.10f
+        private const val POSITION_SMOOTH_MIN = 0.035f
+        private const val POSITION_SMOOTH_MAX = 0.28f
+        private const val POSITION_SETTLE_EPSILON = 0.006f
         private const val ROLL_SMOOTH_FACTOR = 0.18f
         private const val DEG_TO_RAD = 0.017453292f
         private const val NS_TO_SECONDS = 0.000000001f
         private const val ROLL_DEAD_ZONE_RADIANS = 2f * DEG_TO_RAD
         private const val ROLL_ACTIVE_RANGE_RADIANS = 33f * DEG_TO_RAD
+        private const val MIN_TILT_STEP_RADIANS = 0.5f * DEG_TO_RAD
+
         private fun Float.coerceInUnit(): Float = when {
             this < 0f -> 0f
             this > 1f -> 1f

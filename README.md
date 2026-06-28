@@ -11,8 +11,9 @@ The project targets Android 16 / API 36 and is tuned for Pixel high-refresh-rate
 - Tilt-reactive transitions driven by device rotation sensors.
 - Neutral phone position always returns to the first image.
 - Optional loop mode:
-  - Off: tilt left advances through the list and stops on the last image.
-  - On: tilt left/right moves through the image list in either direction.
+  - Off: the selected start side advances through the list and stops on the last image.
+  - Snap: tilt left/right steps through the image list in either direction.
+  - Smooth transition: tilt left/right blends continuously through the image list in either direction.
 - Transition effects:
   - Crossfade
   - Slide
@@ -24,6 +25,9 @@ The project targets Android 16 / API 36 and is tuned for Pixel high-refresh-rate
   - Transition speed
   - Tilt trigger threshold
   - Tilt sensitivity
+  - Step angle per photo
+  - Non-loop start side
+  - Loop transition mode
 - Full-screen image fit editor for crop, resize, and center positioning.
 - Jetpack Compose configuration UI with Material 3 dynamic color.
 - Light/dark mode toggle with a circular theme reveal transition.
@@ -159,14 +163,15 @@ Main components:
 - `LenticularWallpaperService.kt`
   - `WallpaperService` implementation.
   - Per-engine sensor lifecycle.
-  - Frame loop and transition rendering.
+  - Photo transition rendering.
   - Home/lock screen engine target detection.
 - `WallpaperPrefs.kt`
   - Persistent image URIs.
-  - Crop transforms.
   - Transition, loop, speed, threshold, sensitivity, and theme settings.
 - `TransitionEffect.kt`
   - User-facing transition effect definitions.
+- `LoopTransitionMode.kt`
+  - Snap versus smooth loop behavior definitions.
 
 ## Sensor and Power Behavior
 

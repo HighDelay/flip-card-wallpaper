@@ -16,9 +16,12 @@ object WallpaperPrefs {
     private const val KEY_IMAGE_TRANSFORMS = "image_transforms"
     private const val KEY_TRANSITION_EFFECT = "transition_effect"
     private const val KEY_LOOP_ENABLED = "loop_enabled"
+    private const val KEY_LOOP_TRANSITION_MODE = "loop_transition_mode"
     private const val KEY_TRANSITION_SPEED = "transition_speed"
     private const val KEY_TILT_THRESHOLD_DEGREES = "tilt_threshold_degrees"
     private const val KEY_TILT_SENSITIVITY = "tilt_sensitivity"
+    private const val KEY_TILT_START_SIDE = "tilt_start_side"
+    private const val KEY_TILT_STEP_DEGREES = "tilt_step_degrees"
     private const val KEY_DARK_THEME_ENABLED = "dark_theme_enabled"
 
     const val MIN_TRANSITION_SPEED = 0.5f
@@ -30,6 +33,9 @@ object WallpaperPrefs {
     const val MIN_TILT_SENSITIVITY = 0.5f
     const val MAX_TILT_SENSITIVITY = 2f
     const val DEFAULT_TILT_SENSITIVITY = 1f
+    const val MIN_TILT_STEP_DEGREES = 2f
+    const val MAX_TILT_STEP_DEGREES = 15f
+    const val DEFAULT_TILT_STEP_DEGREES = 8f
 
     fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -131,6 +137,15 @@ object WallpaperPrefs {
         }
     }
 
+    fun loopTransitionMode(context: Context): LoopTransitionMode =
+        LoopTransitionMode.fromStoredName(prefs(context).getString(KEY_LOOP_TRANSITION_MODE, null))
+
+    fun saveLoopTransitionMode(context: Context, mode: LoopTransitionMode) {
+        prefs(context).edit {
+            putString(KEY_LOOP_TRANSITION_MODE, mode.name)
+        }
+    }
+
     fun transitionSpeed(context: Context): Float =
         prefs(context)
             .getFloat(KEY_TRANSITION_SPEED, DEFAULT_TRANSITION_SPEED)
@@ -164,6 +179,26 @@ object WallpaperPrefs {
     fun saveTiltSensitivity(context: Context, sensitivity: Float) {
         prefs(context).edit {
             putFloat(KEY_TILT_SENSITIVITY, sensitivity.coerceIn(MIN_TILT_SENSITIVITY, MAX_TILT_SENSITIVITY))
+        }
+    }
+
+    fun tiltStartSide(context: Context): TiltStartSide =
+        TiltStartSide.fromStoredName(prefs(context).getString(KEY_TILT_START_SIDE, null))
+
+    fun saveTiltStartSide(context: Context, side: TiltStartSide) {
+        prefs(context).edit {
+            putString(KEY_TILT_START_SIDE, side.name)
+        }
+    }
+
+    fun tiltStepDegrees(context: Context): Float =
+        prefs(context)
+            .getFloat(KEY_TILT_STEP_DEGREES, DEFAULT_TILT_STEP_DEGREES)
+            .coerceIn(MIN_TILT_STEP_DEGREES, MAX_TILT_STEP_DEGREES)
+
+    fun saveTiltStepDegrees(context: Context, degrees: Float) {
+        prefs(context).edit {
+            putFloat(KEY_TILT_STEP_DEGREES, degrees.coerceIn(MIN_TILT_STEP_DEGREES, MAX_TILT_STEP_DEGREES))
         }
     }
 

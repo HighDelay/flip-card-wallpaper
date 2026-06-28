@@ -151,9 +151,12 @@ class MainActivity : ComponentActivity() {
                     onImageTransformChanged = stateHolder::onImageTransformChanged,
                     onTransitionSelected = stateHolder::onTransitionSelected,
                     onLoopChanged = stateHolder::onLoopChanged,
+                    onLoopTransitionModeChanged = stateHolder::onLoopTransitionModeChanged,
                     onTransitionSpeedChanged = stateHolder::onTransitionSpeedChanged,
                     onTiltThresholdChanged = stateHolder::onTiltThresholdChanged,
                     onTiltSensitivityChanged = stateHolder::onTiltSensitivityChanged,
+                    onTiltStartSideChanged = stateHolder::onTiltStartSideChanged,
+                    onTiltStepDegreesChanged = stateHolder::onTiltStepDegreesChanged,
                     onMotionDefaults = stateHolder::onMotionDefaults,
                     onPreviewProgressChange = stateHolder::onPreviewProgressChange,
                     themeRevealSpec = themeRevealSpec,
@@ -217,9 +220,12 @@ data class FlipCardUiState(
     val imageTransforms: List<ImageTransform>,
     val transitionEffect: TransitionEffect,
     val loopEnabled: Boolean,
+    val loopTransitionMode: LoopTransitionMode,
     val transitionSpeed: Float,
     val tiltThresholdDegrees: Float,
     val tiltSensitivity: Float,
+    val tiltStartSide: TiltStartSide,
+    val tiltStepDegrees: Float,
     val previewProgress: Float,
 ) {
     val canApplyWallpaper: Boolean
@@ -237,9 +243,12 @@ class FlipCardStateHolder(context: Context) {
             imageTransforms = WallpaperPrefs.imageTransforms(appContext, initialUriStrings),
             transitionEffect = WallpaperPrefs.transitionEffect(appContext),
             loopEnabled = WallpaperPrefs.loopEnabled(appContext),
+            loopTransitionMode = WallpaperPrefs.loopTransitionMode(appContext),
             transitionSpeed = WallpaperPrefs.transitionSpeed(appContext),
             tiltThresholdDegrees = WallpaperPrefs.tiltThresholdDegrees(appContext),
             tiltSensitivity = WallpaperPrefs.tiltSensitivity(appContext),
+            tiltStartSide = WallpaperPrefs.tiltStartSide(appContext),
+            tiltStepDegrees = WallpaperPrefs.tiltStepDegrees(appContext),
             previewProgress = 0f,
         ),
     )
@@ -296,6 +305,11 @@ class FlipCardStateHolder(context: Context) {
         state = state.copy(loopEnabled = enabled)
     }
 
+    fun onLoopTransitionModeChanged(mode: LoopTransitionMode) {
+        WallpaperPrefs.saveLoopTransitionMode(appContext, mode)
+        state = state.copy(loopTransitionMode = mode)
+    }
+
     fun onTransitionSpeedChanged(speed: Float) {
         val sanitized = speed.coerceIn(WallpaperPrefs.MIN_TRANSITION_SPEED, WallpaperPrefs.MAX_TRANSITION_SPEED)
         WallpaperPrefs.saveTransitionSpeed(appContext, sanitized)
@@ -317,14 +331,31 @@ class FlipCardStateHolder(context: Context) {
         state = state.copy(tiltSensitivity = sanitized)
     }
 
+    fun onTiltStartSideChanged(side: TiltStartSide) {
+        WallpaperPrefs.saveTiltStartSide(appContext, side)
+        state = state.copy(tiltStartSide = side)
+    }
+
+    fun onTiltStepDegreesChanged(degrees: Float) {
+        val sanitized = degrees.coerceIn(WallpaperPrefs.MIN_TILT_STEP_DEGREES, WallpaperPrefs.MAX_TILT_STEP_DEGREES)
+        WallpaperPrefs.saveTiltStepDegrees(appContext, sanitized)
+        state = state.copy(tiltStepDegrees = sanitized)
+    }
+
     fun onMotionDefaults() {
         WallpaperPrefs.saveTransitionSpeed(appContext, WallpaperPrefs.DEFAULT_TRANSITION_SPEED)
         WallpaperPrefs.saveTiltThresholdDegrees(appContext, WallpaperPrefs.DEFAULT_TILT_THRESHOLD_DEGREES)
         WallpaperPrefs.saveTiltSensitivity(appContext, WallpaperPrefs.DEFAULT_TILT_SENSITIVITY)
+        WallpaperPrefs.saveTiltStartSide(appContext, TiltStartSide.Right)
+        WallpaperPrefs.saveTiltStepDegrees(appContext, WallpaperPrefs.DEFAULT_TILT_STEP_DEGREES)
+        WallpaperPrefs.saveLoopTransitionMode(appContext, LoopTransitionMode.Snap)
         state = state.copy(
             transitionSpeed = WallpaperPrefs.DEFAULT_TRANSITION_SPEED,
             tiltThresholdDegrees = WallpaperPrefs.DEFAULT_TILT_THRESHOLD_DEGREES,
             tiltSensitivity = WallpaperPrefs.DEFAULT_TILT_SENSITIVITY,
+            tiltStartSide = TiltStartSide.Right,
+            tiltStepDegrees = WallpaperPrefs.DEFAULT_TILT_STEP_DEGREES,
+            loopTransitionMode = LoopTransitionMode.Snap,
         )
     }
 
@@ -350,9 +381,12 @@ private fun FlipCardScreen(
     onImageTransformChanged: (Int, ImageTransform) -> Unit,
     onTransitionSelected: (TransitionEffect) -> Unit,
     onLoopChanged: (Boolean) -> Unit,
+    onLoopTransitionModeChanged: (LoopTransitionMode) -> Unit,
     onTransitionSpeedChanged: (Float) -> Unit,
     onTiltThresholdChanged: (Float) -> Unit,
     onTiltSensitivityChanged: (Float) -> Unit,
+    onTiltStartSideChanged: (TiltStartSide) -> Unit,
+    onTiltStepDegreesChanged: (Float) -> Unit,
     onMotionDefaults: () -> Unit,
     onPreviewProgressChange: (Float) -> Unit,
     themeRevealSpec: ThemeRevealSpec?,
@@ -385,9 +419,12 @@ private fun FlipCardScreen(
             onImageTransformChanged = onImageTransformChanged,
             onTransitionSelected = onTransitionSelected,
             onLoopChanged = onLoopChanged,
+            onLoopTransitionModeChanged = onLoopTransitionModeChanged,
             onTransitionSpeedChanged = onTransitionSpeedChanged,
             onTiltThresholdChanged = onTiltThresholdChanged,
             onTiltSensitivityChanged = onTiltSensitivityChanged,
+            onTiltStartSideChanged = onTiltStartSideChanged,
+            onTiltStepDegreesChanged = onTiltStepDegreesChanged,
             onMotionDefaults = onMotionDefaults,
             onPreviewProgressChange = onPreviewProgressChange,
             onDarkThemeChanged = onDarkThemeChanged,
@@ -409,9 +446,12 @@ private fun FlipCardScreen(
                     onImageTransformChanged = { _, _ -> },
                     onTransitionSelected = {},
                     onLoopChanged = {},
+                    onLoopTransitionModeChanged = {},
                     onTransitionSpeedChanged = {},
                     onTiltThresholdChanged = {},
                     onTiltSensitivityChanged = {},
+                    onTiltStartSideChanged = {},
+                    onTiltStepDegreesChanged = {},
                     onMotionDefaults = {},
                     onPreviewProgressChange = {},
                     onDarkThemeChanged = { _, _ -> },
@@ -433,9 +473,12 @@ private fun FlipCardScreenContent(
     onImageTransformChanged: (Int, ImageTransform) -> Unit,
     onTransitionSelected: (TransitionEffect) -> Unit,
     onLoopChanged: (Boolean) -> Unit,
+    onLoopTransitionModeChanged: (LoopTransitionMode) -> Unit,
     onTransitionSpeedChanged: (Float) -> Unit,
     onTiltThresholdChanged: (Float) -> Unit,
     onTiltSensitivityChanged: (Float) -> Unit,
+    onTiltStartSideChanged: (TiltStartSide) -> Unit,
+    onTiltStepDegreesChanged: (Float) -> Unit,
     onMotionDefaults: () -> Unit,
     onPreviewProgressChange: (Float) -> Unit,
     onDarkThemeChanged: (Boolean, Offset) -> Unit,
@@ -467,7 +510,7 @@ private fun FlipCardScreenContent(
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             Header(
-                photoCount = state.imageUris.size,
+                countLabel = "${state.imageUris.size} photos",
                 darkTheme = darkTheme,
                 themeChangeEnabled = themeChangeEnabled,
                 onDarkThemeChanged = onDarkThemeChanged,
@@ -484,14 +527,20 @@ private fun FlipCardScreenContent(
             TransitionSelector(
                 selected = state.transitionEffect,
                 loopEnabled = state.loopEnabled,
+                loopTransitionMode = state.loopTransitionMode,
                 transitionSpeed = state.transitionSpeed,
                 tiltThresholdDegrees = state.tiltThresholdDegrees,
                 tiltSensitivity = state.tiltSensitivity,
+                tiltStartSide = state.tiltStartSide,
+                tiltStepDegrees = state.tiltStepDegrees,
                 onSelected = onTransitionSelected,
                 onLoopChanged = onLoopChanged,
+                onLoopTransitionModeChanged = onLoopTransitionModeChanged,
                 onTransitionSpeedChanged = onTransitionSpeedChanged,
                 onTiltThresholdChanged = onTiltThresholdChanged,
                 onTiltSensitivityChanged = onTiltSensitivityChanged,
+                onTiltStartSideChanged = onTiltStartSideChanged,
+                onTiltStepDegreesChanged = onTiltStepDegreesChanged,
                 onMotionDefaults = onMotionDefaults,
             )
             WallpaperSequenceEditor(
@@ -508,7 +557,7 @@ private fun FlipCardScreenContent(
 
 @Composable
 private fun Header(
-    photoCount: Int,
+    countLabel: String,
     darkTheme: Boolean,
     themeChangeEnabled: Boolean,
     onDarkThemeChanged: (Boolean, Offset) -> Unit,
@@ -528,7 +577,7 @@ private fun Header(
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                text = "$photoCount photos",
+                text = countLabel,
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -937,14 +986,20 @@ private fun PreviewImageLayer(
 private fun TransitionSelector(
     selected: TransitionEffect,
     loopEnabled: Boolean,
+    loopTransitionMode: LoopTransitionMode,
     transitionSpeed: Float,
     tiltThresholdDegrees: Float,
     tiltSensitivity: Float,
+    tiltStartSide: TiltStartSide,
+    tiltStepDegrees: Float,
     onSelected: (TransitionEffect) -> Unit,
     onLoopChanged: (Boolean) -> Unit,
+    onLoopTransitionModeChanged: (LoopTransitionMode) -> Unit,
     onTransitionSpeedChanged: (Float) -> Unit,
     onTiltThresholdChanged: (Float) -> Unit,
     onTiltSensitivityChanged: (Float) -> Unit,
+    onTiltStartSideChanged: (TiltStartSide) -> Unit,
+    onTiltStepDegreesChanged: (Float) -> Unit,
     onMotionDefaults: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1059,6 +1114,22 @@ private fun TransitionSelector(
                     valueRange = WallpaperPrefs.MIN_TILT_SENSITIVITY..WallpaperPrefs.MAX_TILT_SENSITIVITY,
                     steps = 5,
                 )
+                if (!loopEnabled || loopTransitionMode == LoopTransitionMode.Snap) {
+                    TuningSlider(
+                        label = "Step",
+                        valueLabel = "${tiltStepDegrees.roundToInt()} deg/photo",
+                        value = tiltStepDegrees,
+                        onValueChange = onTiltStepDegreesChanged,
+                        valueRange = WallpaperPrefs.MIN_TILT_STEP_DEGREES..WallpaperPrefs.MAX_TILT_STEP_DEGREES,
+                        steps = 12,
+                    )
+                }
+                if (!loopEnabled) {
+                    TiltStartSideSelector(
+                        selected = tiltStartSide,
+                        onSelected = onTiltStartSideChanged,
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1071,9 +1142,9 @@ private fun TransitionSelector(
                         )
                         Text(
                             text = if (loopEnabled) {
-                                "Left for next; right wraps backward."
+                                "${loopTransitionMode.label}: ${loopTransitionMode.description}"
                             } else {
-                                "Left tilt stops on the last photo."
+                                "${tiltStartSide.label} tilt stops on the last photo."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1084,8 +1155,124 @@ private fun TransitionSelector(
                         onCheckedChange = onLoopChanged,
                     )
                 }
+                if (loopEnabled) {
+                    LoopTransitionModeSelector(
+                        selected = loopTransitionMode,
+                        onSelected = onLoopTransitionModeChanged,
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun LoopTransitionModeSelector(
+    selected: LoopTransitionMode,
+    onSelected: (LoopTransitionMode) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "Loop mode",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            LoopTransitionMode.entries.forEach { mode ->
+                val selectedMode = mode == selected
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 44.dp)
+                        .clickable { onSelected(mode) },
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (selectedMode) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    contentColor = if (selectedMode) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = mode.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+        }
+        Text(
+            text = selected.description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun TiltStartSideSelector(
+    selected: TiltStartSide,
+    onSelected: (TiltStartSide) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "Start side",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.ExtraBold,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TiltStartSide.entries.forEach { side ->
+                val selectedSide = side == selected
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 44.dp)
+                        .clickable { onSelected(side) },
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (selectedSide) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    contentColor = if (selectedSide) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = side.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+        }
+        Text(
+            text = selected.description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
