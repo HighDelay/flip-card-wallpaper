@@ -21,6 +21,7 @@ import android.view.SurfaceHolder
 import androidx.core.net.toUri
 import kotlin.math.abs
 import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.min
 
@@ -103,6 +104,9 @@ class LenticularWallpaperService : WallpaperService() {
         @Volatile
         private var maxTiltPosition = 0f
 
+        private var hasNeutralTurnYaw = false
+        private var neutralTurnYawRadians = 0f
+
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
@@ -110,6 +114,7 @@ class LenticularWallpaperService : WallpaperService() {
             missingImagesText = wallpaperTarget.missingImagesText
             activeSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION)
                 ?: sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
             setTouchEventsEnabled(false)
@@ -158,7 +163,8 @@ class LenticularWallpaperService : WallpaperService() {
         override fun onSensorChanged(event: SensorEvent) {
             when (event.sensor.type) {
                 Sensor.TYPE_ROTATION_VECTOR,
-                Sensor.TYPE_GAME_ROTATION_VECTOR -> {
+                Sensor.TYPE_GAME_ROTATION_VECTOR,
+                Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
                     updateTargetPositionFromRotationVector(event.values)
                 }
 
@@ -189,6 +195,8 @@ class LenticularWallpaperService : WallpaperService() {
             if (sensorRegistered) return
             activeSensor?.let { sensor ->
                 filteredRollRadians = 0f
+                hasNeutralTurnYaw = false
+                neutralTurnYawRadians = 0f
                 lastGyroTimestampNs = 0L
                 loopTiltActive = false
                 loopDirection = 0f
@@ -206,6 +214,8 @@ class LenticularWallpaperService : WallpaperService() {
             sensorManager.unregisterListener(this)
             sensorRegistered = false
             lastGyroTimestampNs = 0L
+            hasNeutralTurnYaw = false
+            neutralTurnYawRadians = 0f
             loopTiltActive = false
             loopDirection = 0f
         }
@@ -213,7 +223,11 @@ class LenticularWallpaperService : WallpaperService() {
         private fun updateTargetPositionFromRotationVector(values: FloatArray) {
             SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
             val screenMatrix = screenAdjustedRotationMatrix()
-            updateTargetPositionFromRoll(lateralRollFromMatrix(screenMatrix))
+            val lateralRoll = lateralRollFromMatrix(screenMatrix)
+            val uprightTurn = uprightTurnFromMatrix(screenMatrix) *
+                uprightTurnWeight(screenMatrix) *
+                UPRIGHT_TURN_GAIN
+            updateTargetPositionFromRoll(blendedSideTilt(lateralRoll, uprightTurn))
         }
 
         private fun screenAdjustedRotationMatrix(): FloatArray =
@@ -268,6 +282,34 @@ class LenticularWallpaperService : WallpaperService() {
 
         private fun lateralRollFromMatrix(matrix: FloatArray): Float =
             -asin(matrix[6].coerceIn(-1f, 1f))
+
+        private fun uprightTurnFromMatrix(matrix: FloatArray): Float {
+            val yawRadians = atan2(matrix[2], matrix[5])
+            if (!hasNeutralTurnYaw) {
+                neutralTurnYawRadians = yawRadians
+                hasNeutralTurnYaw = true
+                return 0f
+            }
+            return -wrapRadians(yawRadians - neutralTurnYawRadians)
+        }
+
+        private fun uprightTurnWeight(matrix: FloatArray): Float {
+            val screenTopVertical = abs(matrix[7]).coerceInUnit()
+            return ((screenTopVertical - UPRIGHT_TURN_START) / UPRIGHT_TURN_RANGE).coerceInUnit()
+        }
+
+        private fun blendedSideTilt(lateralRoll: Float, uprightTurn: Float): Float {
+            if (uprightTurn == 0f || lateralRoll == 0f) {
+                return lateralRoll + uprightTurn
+            }
+
+            val sameDirection = (lateralRoll > 0f) == (uprightTurn > 0f)
+            if (!sameDirection) {
+                return lateralRoll + uprightTurn
+            }
+
+            return if (abs(uprightTurn) > abs(lateralRoll)) uprightTurn else lateralRoll
+        }
 
         private fun updateTargetPositionFromRoll(rollRadians: Float) {
             filteredRollRadians += ROLL_SMOOTH_FACTOR * (rollRadians - filteredRollRadians)
@@ -748,6 +790,19 @@ class LenticularWallpaperService : WallpaperService() {
         private const val ROLL_DEAD_ZONE_RADIANS = 2f * DEG_TO_RAD
         private const val ROLL_ACTIVE_RANGE_RADIANS = 33f * DEG_TO_RAD
         private const val MIN_TILT_STEP_RADIANS = 0.5f * DEG_TO_RAD
+        private const val UPRIGHT_TURN_START = 0.58f
+        private const val UPRIGHT_TURN_FULL = 0.86f
+        private const val UPRIGHT_TURN_RANGE = UPRIGHT_TURN_FULL - UPRIGHT_TURN_START
+        private const val UPRIGHT_TURN_GAIN = 0.42f
+        private const val TWO_PI = 6.2831855f
+        private const val PI = 3.1415927f
+
+        private fun wrapRadians(radians: Float): Float {
+            var wrapped = radians
+            while (wrapped > PI) wrapped -= TWO_PI
+            while (wrapped < -PI) wrapped += TWO_PI
+            return wrapped
+        }
 
         private fun Float.coerceInUnit(): Float = when {
             this < 0f -> 0f
