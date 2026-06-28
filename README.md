@@ -74,11 +74,11 @@ Full local verification:
 
 ## Release APK
 
-The project can produce a release APK with Gradle. The default `release` build type currently does not define signing credentials, so use one of the following flows.
+The project is configured to use `flipcard-release.jks` from the repository root as the release keystore. The keystore file is intentionally ignored by Git.
 
 ### Unsigned Release APK
 
-Build the release variant:
+If release signing passwords are not configured, Gradle can still build an unsigned release APK:
 
 ```powershell
 .\gradlew.bat :app:assembleRelease
@@ -94,49 +94,31 @@ Unsigned release APKs are useful for local inspection, but Android devices will 
 
 ### Signed Release APK
 
-1. Create a keystore if you do not already have one:
+The repository expects the release keystore at:
+
+```text
+flipcard-release.jks
+```
+
+If you need to recreate that keystore, run:
 
 ```powershell
 keytool -genkeypair -v -keystore flipcard-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias flipcard
 ```
 
-2. Add signing values to `local.properties` or another ignored local file:
+Add the keystore passwords to `local.properties`:
 
 ```properties
-RELEASE_STORE_FILE=C:\\path\\to\\flipcard-release.jks
 RELEASE_STORE_PASSWORD=your_store_password
 RELEASE_KEY_ALIAS=flipcard
 RELEASE_KEY_PASSWORD=your_key_password
 ```
 
-3. Add a release signing config in `app/build.gradle.kts`:
+`RELEASE_KEY_ALIAS` defaults to `flipcard`, and `RELEASE_KEY_PASSWORD` defaults to `RELEASE_STORE_PASSWORD` if omitted.
 
-```kotlin
-import java.util.Properties
+You can also provide the same values as environment variables instead of editing `local.properties`.
 
-val localProperties = Properties().apply {
-    rootProject.file("local.properties").inputStream().use(::load)
-}
-
-android {
-    signingConfigs {
-        create("release") {
-            storeFile = file(localProperties["RELEASE_STORE_FILE"] as String)
-            storePassword = localProperties["RELEASE_STORE_PASSWORD"] as String
-            keyAlias = localProperties["RELEASE_KEY_ALIAS"] as String
-            keyPassword = localProperties["RELEASE_KEY_PASSWORD"] as String
-        }
-    }
-
-    buildTypes {
-        release {
-            signingConfig = signingConfigs.getByName("release")
-        }
-    }
-}
-```
-
-4. Build the signed release APK:
+Build the signed release APK:
 
 ```powershell
 .\gradlew.bat :app:assembleRelease

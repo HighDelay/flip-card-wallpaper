@@ -1,7 +1,30 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        localPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun releaseSigningProperty(name: String): String? =
+    localProperties.getProperty(name)
+        ?: providers.environmentVariable(name).orNull
+
+val releaseStoreFile = rootProject.file("flipcard-release.jks")
+val releaseStorePassword = releaseSigningProperty("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningProperty("RELEASE_KEY_ALIAS") ?: "flipcard"
+val releaseKeyPassword = releaseSigningProperty("RELEASE_KEY_PASSWORD") ?: releaseStorePassword
+val hasReleaseSigningConfig =
+    releaseStoreFile.isFile &&
+        !releaseStorePassword.isNullOrBlank() &&
+        releaseKeyAlias.isNotBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
 
 android {
     namespace = "com.highdel4y.flipcardwallpaper"
@@ -21,8 +44,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = false
             }
